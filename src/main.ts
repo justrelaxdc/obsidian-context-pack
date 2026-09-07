@@ -1,4 +1,4 @@
-import { App, Plugin, TFile, TFolder, TAbstractFile, SuggestModal, Notice, Menu, moment } from 'obsidian';
+import { App, Plugin, TFile, TFolder, TAbstractFile, SuggestModal, Notice, Menu, moment, type CachedMetadata } from 'obsidian';
 import { SettingsTab, DEFAULT_SETTINGS, type PluginSettings } from './settings';
 import { exportVault, exportSingleNote, buildAiOutput, getProjectKnowledgeInstructions } from './exporter';
 import { buildContextPack } from './context-pack';
@@ -351,6 +351,24 @@ export default class ContextPackPlugin extends Plugin {
       })
     );
 
+    this.registerEvent(
+      this.app.vault.on('create', (file) => {
+        void this.handleFileModifyForExport(file);
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on('delete', (file) => {
+        this.handleFileDeleteForExport(file);
+      })
+    );
+
+    this.registerEvent(
+      this.app.metadataCache.on('changed', (file, _data, cache) => {
+        void this.handleFileModifyForExport(file, cache);
+      })
+    );
+
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.freshnessAutoCheck) {
         const leaves = this.app.workspace.getLeavesOfType(FRESHNESS_VIEW_TYPE);
@@ -611,7 +629,7 @@ export default class ContextPackPlugin extends Plugin {
     );
   }
 
-  private async handleFileModifyForExport(file: TAbstractFile): Promise<void> {
+  private async handleFileModifyForExport(file: TAbstractFile, passedCache?: CachedMetadata): Promise<void> {
     if (!this.settings.autoSyncPacks) return;
     if (!(file instanceof TFile) || file.extension !== 'md') return;
 
@@ -626,8 +644,8 @@ export default class ContextPackPlugin extends Plugin {
       return;
     }
 
-    // 2. Extract tags from metadata cache (fast, in-memory)
-    const cache = this.app.metadataCache.getFileCache(file);
+    // 3. Extract tags from metadata cache (fast, in-memory)
+    const cache = passedCache ?? this.app.metadataCache.getFileCache(file);
     const fileTags = new Set<string>();
 
     if (cache?.tags) {
@@ -643,6 +661,21 @@ export default class ContextPackPlugin extends Plugin {
       for (const item of list) {
         fileTags.add(String(item).replace(/^#/, '').trim().toLowerCase());
       }
+    }
+
+    // 4. In-memory content fallback: captures instant Ctrl+V before AST metadata cache updates
+    try {
+      const content = await this.app.vault.cachedRead(file);
+      if (content.includes('export/')) {
+        const matches = content.match(/export\/[a-zA-Z0-9_\u0400-\u04FF\/-]+/gi);
+        if (matches) {
+          for (const m of matches) {
+            fileTags.add(m.replace(/^#/, '').trim().toLowerCase());
+          }
+        }
+      }
+    } catch {
+      // ignore
     }
 
     // Find any export/ tags in this note (e.g. export/woopilot, export/health)
@@ -678,6 +711,37 @@ export default class ContextPackPlugin extends Plugin {
           await this.reExportPack(pack, { silent: true });
         } catch (err) {
           console.error('[AI Context Pack] Auto-export failed:', err);
+        }
+      }, debounceMs);
+      this.autoSyncDebounceTimers.set(key, timer);
+    }
+  }
+
+  private handleFileDeleteForExport(file: TAbstractFile): void {
+    if (!this.settings.autoSyncPacks) return;
+    const affectedPacks: PackRecord[] = [];
+    for (const pack of this.settings.packRegistry) {
+      if (pack.source.type === 'tag') {
+        const wasInPack = (pack.files ?? []).some(f => f.path === file.path);
+        if (wasInPack) {
+          affectedPacks.push(pack);
+        }
+      }
+    }
+    if (affectedPacks.length === 0) return;
+    const debounceMs = this.settings.autoSyncDebounceMs ?? 3000;
+    for (const pack of affectedPacks) {
+      const key = `${pack.source.type}:${pack.source.query}`;
+      const existingTimer = this.autoSyncDebounceTimers.get(key);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
+      }
+      const timer = window.setTimeout(async () => {
+        this.autoSyncDebounceTimers.delete(key);
+        try {
+          await this.reExportPack(pack, { silent: true });
+        } catch (err) {
+          console.error('[AI Context Pack] Auto-export failed on delete:', err);
         }
       }, debounceMs);
       this.autoSyncDebounceTimers.set(key, timer);
