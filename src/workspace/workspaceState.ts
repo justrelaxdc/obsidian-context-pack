@@ -70,7 +70,7 @@ export async function computeWorkspaceState(
   let latestPackFile: TFile | null = null;
   for (const file of app.vault.getMarkdownFiles()) {
     if (outputFolder && !file.path.startsWith(outputFolder + '/')) continue;
-    if (file.basename.startsWith(packPrefix)) {
+    if (file.basename.startsWith(packPrefix) || file.basename === `pack-folder-${folderName}`) {
       if (!latestPackFile || file.stat.mtime > latestPackFile.stat.mtime) {
         latestPackFile = file;
       }

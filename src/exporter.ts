@@ -102,6 +102,16 @@ export function downloadBlob(blob: Blob, filename: string): void {
 
 async function saveToVault(app: App, folder: string, filename: string, blob: Blob): Promise<void> {
   const buffer = await blob.arrayBuffer();
+  if (folder) {
+    const folderObj = app.vault.getAbstractFileByPath(folder);
+    if (!folderObj) {
+      try {
+        await app.vault.createFolder(folder);
+      } catch {
+        // ignore if already created
+      }
+    }
+  }
   const path = folder ? `${folder}/${filename}` : filename;
   const existing = app.vault.getAbstractFileByPath(path);
   if (existing && existing instanceof TFile) {
@@ -136,6 +146,8 @@ export interface AiOutputOptions {
   saveToFile: boolean;
   outputFolder: string;
   openAiUrl: boolean;
+  includeDateInFilename?: boolean;
+  silent?: boolean;
 }
 
 export async function buildAiOutput(
@@ -148,10 +160,12 @@ export async function buildAiOutput(
   const tokenCount = estimateTokens(content);
   const date = window.moment().format('YYYYMMDD');
   const aiLabel = preset.target.replace(/-text$/, '').replace(/-zip$/, '');
-  const filename = `pack-${slug}-${aiLabel}-${date}.md`;
+  const filename = options.includeDateInFilename
+    ? `pack-${slug}-${aiLabel}-${date}.md`
+    : `pack-${slug}-${aiLabel}.md`;
   let savedPath = '';
 
-  if (options.copyToClipboard && preset.copyToClipboard) {
+  if (!options.silent && options.copyToClipboard && preset.copyToClipboard) {
     await copyToClipboard(content);
   }
 
@@ -164,15 +178,21 @@ export async function buildAiOutput(
     }
   }
 
-  if (options.copyToClipboard && preset.copyToClipboard && savedPath) {
-    new Notice(t('notice_ai_done', tokenCount), 5000);
-  } else if (options.copyToClipboard && preset.copyToClipboard) {
-    new Notice(t('notice_ai_copied', tokenCount), 5000);
-  } else if (savedPath) {
-    new Notice(t('notice_ai_saved', savedPath, tokenCount), 8000);
-  }
+  if (options.silent) {
+    if (savedPath) {
+      new Notice(`🔄 [AI Context Pack] Auto-updated: ${slug}`, 2500);
+    }
+  } else {
+    if (options.copyToClipboard && preset.copyToClipboard && savedPath) {
+      new Notice(t('notice_ai_done', tokenCount), 5000);
+    } else if (options.copyToClipboard && preset.copyToClipboard) {
+      new Notice(t('notice_ai_copied', tokenCount), 5000);
+    } else if (savedPath) {
+      new Notice(t('notice_ai_saved', savedPath, tokenCount), 8000);
+    }
 
-  if (options.openAiUrl && preset.aiUrl) {
-    window.open(preset.aiUrl, '_blank');
+    if (options.openAiUrl && preset.aiUrl) {
+      window.open(preset.aiUrl, '_blank');
+    }
   }
 }

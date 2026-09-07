@@ -91,6 +91,9 @@ export interface PluginSettings {
   freshnessAutoCheck: boolean;
   aiBriefSettings: AIBriefSettings;
   epubSortStrategy: EpubSortStrategy;
+  includeDateInFilename: boolean;
+  autoSyncPacks: boolean;
+  autoSyncDebounceMs: number;
   workspaces: WorkspaceConfig[];
   workspaceViewDark: boolean;
 }
@@ -102,6 +105,9 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   includeFrontmatterTitle: true,
   openAfterExport: false,
   contextPackOutputFolder: '',
+  includeDateInFilename: false,
+  autoSyncPacks: true,
+  autoSyncDebounceMs: 3000,
   customRules: [],
   dailyNotesAutoDetect: true,
   dailyNotesFolder: '',
@@ -205,6 +211,26 @@ export class SettingsTab extends PluginSettingTab {
         .setValue(this.plugin.settings.contextPackOutputFolder)
         .onChange(async value => {
           this.plugin.settings.contextPackOutputFolder = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Auto-reexport on #export/... Tagged Notes')
+      .setDesc('Automatically re-exports matching Context Packs in the background when notes with #export/... tags are edited (debounced 3s, silent mode).')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.autoSyncPacks)
+        .onChange(async value => {
+          this.plugin.settings.autoSyncPacks = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Include Date in Pack Filename')
+      .setDesc('When disabled (default), filenames are static (e.g. pack-tag-export-WooPilot-gemini.md) so edits update the same file in-place for Google Drive & Gemini sync.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.includeDateInFilename)
+        .onChange(async value => {
+          this.plugin.settings.includeDateInFilename = value;
           await this.plugin.saveSettings();
         }));
 

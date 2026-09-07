@@ -56,6 +56,14 @@ function toFreshnessTarget(target: OutputTarget): PackRecord['target'] | null {
 
 export default class ContextPackPlugin extends Plugin {
   settings!: PluginSettings;
+  private autoSyncDebounceTimers: Map<string, number> = new Map();
+
+  onunload() {
+    for (const timer of this.autoSyncDebounceTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    this.autoSyncDebounceTimers.clear();
+  }
 
   async onload() {
     await this.loadSettings();
@@ -337,6 +345,12 @@ export default class ContextPackPlugin extends Plugin {
       })
     );
 
+    this.registerEvent(
+      this.app.vault.on('modify', (file) => {
+        void this.handleFileModifyForExport(file);
+      })
+    );
+
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.freshnessAutoCheck) {
         const leaves = this.app.workspace.getLeavesOfType(FRESHNESS_VIEW_TYPE);
@@ -583,24 +597,92 @@ export default class ContextPackPlugin extends Plugin {
     }
   }
 
-  async reExportPack(pack: PackRecord): Promise<void> {
+  private async handleFileModifyForExport(file: TAbstractFile): Promise<void> {
+    if (!this.settings.autoSyncPacks) return;
+    if (!(file instanceof TFile) || file.extension !== 'md') return;
+
+    // 1. Exclude the output folder dynamically from settings
+    const outFolder = this.settings.contextPackOutputFolder || this.settings.outputFolder;
+    if (outFolder && (file.path.startsWith(outFolder + '/') || file.path === outFolder)) {
+      return;
+    }
+
+    // 2. Extract tags from metadata cache (fast, in-memory)
+    const cache = this.app.metadataCache.getFileCache(file);
+    const fileTags = new Set<string>();
+
+    if (cache?.tags) {
+      for (const t of cache.tags) {
+        fileTags.add(t.tag.replace(/^#/, '').toLowerCase());
+      }
+    }
+
+    const fm = cache?.frontmatter;
+    if (fm) {
+      const rawTags = fm.tags ?? fm.tag;
+      const list = Array.isArray(rawTags) ? rawTags : (rawTags ? [rawTags] : []);
+      for (const item of list) {
+        fileTags.add(String(item).replace(/^#/, '').trim().toLowerCase());
+      }
+    }
+
+    // Find any export/ tags in this note (e.g. export/woopilot, export/health)
+    const activeExportTags = Array.from(fileTags).filter(t => t.startsWith('export/'));
+
+    // Check against registered packs in packRegistry
+    const affectedPacks: PackRecord[] = [];
+
+    for (const pack of this.settings.packRegistry) {
+      if (pack.source.type === 'tag') {
+        const tagQuery = pack.source.query.replace(/^#/, '').toLowerCase();
+        const hasTag = activeExportTags.includes(tagQuery);
+        const wasInPack = (pack.files ?? []).some(f => f.path === file.path);
+        if (hasTag || wasInPack) {
+          affectedPacks.push(pack);
+        }
+      }
+    }
+
+    if (affectedPacks.length === 0) return;
+
+    // Debounce re-export for each affected pack
+    const debounceMs = this.settings.autoSyncDebounceMs ?? 3000;
+    for (const pack of affectedPacks) {
+      const key = `${pack.source.type}:${pack.source.query}`;
+      const existingTimer = this.autoSyncDebounceTimers.get(key);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
+      }
+      const timer = window.setTimeout(async () => {
+        this.autoSyncDebounceTimers.delete(key);
+        try {
+          await this.reExportPack(pack, { silent: true });
+        } catch (err) {
+          console.error('[AI Context Pack] Auto-export failed:', err);
+        }
+      }, debounceMs);
+      this.autoSyncDebounceTimers.set(key, timer);
+    }
+  }
+
+  async reExportPack(pack: PackRecord, options?: { silent?: boolean }): Promise<void> {
     if (pack.outputSelectorState) {
       this.settings.outputSelectorState = { ...pack.outputSelectorState };
     }
     switch (pack.source.type) {
       case 'folder':
-        await this.packFromFolderPath(pack.source.query);
+        await this.packFromFolderPath(pack.source.query, options);
         break;
       case 'tag':
-        await this.handlePackFromTag(pack.source.query.replace(/^#/, ''));
+        await this.handlePackFromTag(pack.source.query.replace(/^#/, ''), options);
         break;
       case 'moc': {
         const moc = this.app.vault.getAbstractFileByPath(pack.source.query);
-        if (moc instanceof TFile) await this.packFromMoc(moc);
+        if (moc instanceof TFile) await this.packFromMoc(moc, options);
         break;
       }
       default:
-        new Notice(t('ws_notice_reexport_unsupported'));
+        if (!options?.silent) new Notice(t('ws_notice_reexport_unsupported'));
     }
   }
 
@@ -850,30 +932,34 @@ export default class ContextPackPlugin extends Plugin {
     new FolderSuggest(this.app, folders, (folder) => { void this.packFromFolderPath(folder); }, t('folder_picker_title_pack')).open();
   }
 
-  private async packFromFolderPath(folderPath: string) {
+  private async packFromFolderPath(folderPath: string, options?: { silent?: boolean }) {
     const files = this.app.vault.getMarkdownFiles()
       .filter(f => f.path.startsWith(folderPath + '/'));
 
     if (files.length === 0) {
-      new Notice(t('notice_no_files'));
+      if (!options?.silent) new Notice(t('notice_no_files'));
       return;
     }
 
     const title = folderPath.split('/').pop() ?? folderPath;
-    const { notice, controller, setProgress } = this.startProgress(t('notice_packing'));
+    const progress = options?.silent ? null : this.startProgress(t('notice_packing'));
     try {
       const content = await buildContextPack(files, this.app, this.formatOptions(), {
         title,
         source: `folder:${folderPath}`,
-      }, (cur, total) => setProgress(`${cur} / ${total}`), controller.signal);
-      notice.hide();
+      }, (cur, total) => progress?.setProgress(`${cur} / ${total}`), progress?.controller.signal);
+      progress?.notice.hide();
       this.handlePackOutput(content, `folder-${title}`, files.length, title, {
         source: { type: 'folder', query: folderPath },
         files,
         name: title,
-      });
+      }, undefined, options?.silent);
     } catch (err) {
-      this.handlePackError(notice, err);
+      if (progress) {
+        this.handlePackError(progress.notice, err);
+      } else {
+        console.error('[AI Context Pack]', err);
+      }
     }
   }
 
@@ -881,22 +967,29 @@ export default class ContextPackPlugin extends Plugin {
     new TagSuggest(this.app, this.getAllTags(), (tag) => { void this.handlePackFromTag(tag); }).open();
   }
 
-  private async handlePackFromTag(tag: string): Promise<void> {
+  private async handlePackFromTag(tag: string, options?: { silent?: boolean }): Promise<void> {
     const files = this.getFilesByTag(tag);
-    if (files.length === 0) { new Notice(t('notice_no_files')); return; }
-    const { notice, controller, setProgress } = this.startProgress(t('notice_packing'));
+    if (files.length === 0) {
+      if (!options?.silent) new Notice(t('notice_no_files'));
+      return;
+    }
+    const progress = options?.silent ? null : this.startProgress(t('notice_packing'));
     try {
       const content = await buildContextPack(files, this.app, this.formatOptions(), {
         title: tag, source: `tag:${tag}`,
-      }, (cur, total) => setProgress(`${cur} / ${total}`), controller.signal);
-      notice.hide();
+      }, (cur, total) => progress?.setProgress(`${cur} / ${total}`), progress?.controller.signal);
+      progress?.notice.hide();
       this.handlePackOutput(content, `tag-${tag.replace(/\//g, '-')}`, files.length, `#${tag}`, {
         source: { type: 'tag', query: tag },
         files,
         name: `#${tag}`,
-      });
+      }, undefined, options?.silent);
     } catch (err) {
-      this.handlePackError(notice, err);
+      if (progress) {
+        this.handlePackError(progress.notice, err);
+      } else {
+        console.error('[AI Context Pack]', err);
+      }
     }
   }
 
@@ -985,17 +1078,17 @@ export default class ContextPackPlugin extends Plugin {
     }
 
     if (packFiles.length === 0) {
-      new Notice(t('notice_no_files'));
+      if (!options?.silent) new Notice(t('notice_no_files'));
       return;
     }
 
-    const { notice, controller, setProgress } = this.startProgress(t('notice_packing'));
+    const progress = options?.silent ? null : this.startProgress(t('notice_packing'));
     try {
       let content = await buildContextPack(packFiles, this.app, this.formatOptions(), {
         title: moc.basename,
         source: `moc:${moc.basename}`,
         ...(isAiBriefMoc && packTitle ? { titleOverride: packTitle, omitMeta: true, description: packDescription } : {}),
-      }, (cur, total) => setProgress(`${cur} / ${total}`), controller.signal);
+      }, (cur, total) => progress?.setProgress(`${cur} / ${total}`), progress?.controller.signal);
 
       if (isAiBriefMoc && knowledgeOverview) {
         const sep = '\n\n---\n\n';
@@ -1005,14 +1098,18 @@ export default class ContextPackPlugin extends Plugin {
         }
       }
 
-      notice.hide();
+      progress?.notice.hide();
       this.handlePackOutput(content, `moc-${moc.basename}`, packFiles.length, displaySource, {
         source: { type: 'moc', query: moc.path },
         files: packFiles,
         name: moc.basename,
-      }, isAiBriefMoc ? true : undefined);
+      }, isAiBriefMoc ? true : undefined, options?.silent);
     } catch (err) {
-      this.handlePackError(notice, err);
+      if (progress) {
+        this.handlePackError(progress.notice, err);
+      } else {
+        console.error('[AI Context Pack]', err);
+      }
     }
   }
 
@@ -1085,13 +1182,21 @@ export default class ContextPackPlugin extends Plugin {
     return key ? t(key) : '';
   }
 
-  private handlePackOutput(content: string, slug: string, noteCount: number, source: string, packMeta?: PackMeta, explicitHasAiBrief?: boolean): void {
+  private handlePackOutput(
+    content: string,
+    slug: string,
+    noteCount: number,
+    source: string,
+    packMeta?: PackMeta,
+    explicitHasAiBrief?: boolean,
+    silent?: boolean
+  ): void {
     const hasAiBrief = explicitHasAiBrief ?? (packMeta?.files ?? []).some(f => {
       const headings = this.app.metadataCache.getFileCache(f)?.headings?.map(h => h.heading) ?? [];
       return isAiBriefByHeadings(headings);
     });
 
-    if (this.settings.showOutputModal) {
+    if (!silent && this.settings.showOutputModal) {
       new OutputTargetModal(this.app, content, this.settings, () => this.saveSettings(), async (choice) => {
         const preset = OUTPUT_PRESETS[choice.target];
         const finalContent = (choice.includeStarterPrompt && preset.supportsStarterPrompt)
@@ -1105,6 +1210,7 @@ export default class ContextPackPlugin extends Plugin {
             saveToFile: choice.saveToFile,
             outputFolder: this.settings.contextPackOutputFolder || this.settings.outputFolder,
             openAiUrl: choice.openAiUrl,
+            includeDateInFilename: this.settings.includeDateInFilename,
           });
         }
         if (packMeta) {
@@ -1122,13 +1228,15 @@ export default class ContextPackPlugin extends Plugin {
         ? this.applyStarterPrompt(content, source, noteCount, selectorState, this.settings.defaultMode, hasAiBrief)
         : content;
       if (target === 'notebooklm-text' || target === 'notebooklm-zip') {
-        void this.saveContextPack(finalContent, slug, noteCount);
+        void this.saveContextPack(finalContent, slug, noteCount, silent);
       } else {
         void buildAiOutput(this.app, finalContent, slug, preset, {
-          copyToClipboard: preset.copyToClipboard,
+          copyToClipboard: silent ? false : preset.copyToClipboard,
           saveToFile: preset.saveToFile,
           outputFolder: this.settings.contextPackOutputFolder || this.settings.outputFolder,
-          openAiUrl: this.settings.openAiUrl,
+          openAiUrl: silent ? false : this.settings.openAiUrl,
+          includeDateInFilename: this.settings.includeDateInFilename,
+          silent,
         });
       }
       if (packMeta) {
@@ -1140,12 +1248,24 @@ export default class ContextPackPlugin extends Plugin {
     }
   }
 
-  private async saveContextPack(content: string, slug: string, noteCount: number): Promise<void> {
+  private async saveContextPack(content: string, slug: string, noteCount: number, silent?: boolean): Promise<void> {
     const date = window.moment().format('YYYYMMDD');
-    const filename = `pack-${slug}-${date}.md`;
+    const filename = this.settings.includeDateInFilename
+      ? `pack-${slug}-${date}.md`
+      : `pack-${slug}.md`;
 
     try {
       const folder = this.settings.contextPackOutputFolder || this.settings.outputFolder || '';
+      if (folder) {
+        const folderObj = this.app.vault.getAbstractFileByPath(folder);
+        if (!folderObj) {
+          try {
+            await this.app.vault.createFolder(folder);
+          } catch {
+            // ignore if already created
+          }
+        }
+      }
       const path = folder ? `${folder}/${filename}` : filename;
       const existing = this.app.vault.getAbstractFileByPath(path);
       if (existing instanceof TFile) {
@@ -1153,10 +1273,14 @@ export default class ContextPackPlugin extends Plugin {
       } else {
         await this.app.vault.create(path, content);
       }
-      new Notice(`${t('notice_pack_done', noteCount)}\n📄 ${path}`, 8000);
+      if (silent) {
+        new Notice(`🔄 [AI Context Pack] Auto-updated: ${slug}`, 2500);
+      } else {
+        new Notice(`${t('notice_pack_done', noteCount)}\n📄 ${path}`, 8000);
+      }
     } catch (err) {
       console.error('[AI Context Pack] Failed to save pack:', err);
-      new Notice(t('notice_error'));
+      if (!silent) new Notice(t('notice_error'));
     }
   }
 
