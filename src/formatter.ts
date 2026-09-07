@@ -11,9 +11,9 @@ export interface FormatOptions {
 }
 
 export function formatForNotebookLM(raw: string, options: FormatOptions): string {
-  const { fm, body } = parseFrontmatter(raw);
+  const { fm, rawFm, body } = parseFrontmatter(raw);
 
-  let result = body;
+  let result = body.trim().replace(/^---+\n+/, '');
   result = stripEmbeds(result);
   result = transformMermaidBlocks(result);
   result = resolveWikiLinks(result);
@@ -21,7 +21,10 @@ export function formatForNotebookLM(raw: string, options: FormatOptions): string
   result = stripInlineTags(result);
   result = collapseBlankLines(result);
 
-  if (options.includeFrontmatterTitle) {
+  if (hasMeaningfulFrontmatter(fm) && rawFm) {
+    const fmBlock = `---\n${rawFm}\n---`;
+    result = result ? `${fmBlock}\n\n${result}` : fmBlock;
+  } else if (options.includeFrontmatterTitle) {
     const header = buildHeader(fm);
     if (header) result = header + '\n\n' + result;
   }
@@ -37,29 +40,34 @@ export function formatForNotebookLM(raw: string, options: FormatOptions): string
     }
   }
 
-  return result.trim().replace(/^---+\n+/, '');
+  return result.trim();
 }
 
-function parseFrontmatter(raw: string): { fm: Record<string, unknown>; body: string } {
-  const match = raw.match(/^---\r?\n(?!\r?\n)([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!match) return { fm: {}, body: raw };
+function hasMeaningfulFrontmatter(fm: Record<string, unknown>): boolean {
+  const keys = Object.keys(fm);
+  return keys.some(k => k !== 'tags' && k !== 'tag');
+}
 
+function parseFrontmatter(raw: string): { fm: Record<string, unknown>; rawFm: string; body: string } {
+  const match = raw.match(/^---\r?\n(?!\r?\n)([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!match) return { fm: {}, rawFm: '', body: raw };
+
+  const rawFm = match[1].replace(/\r\n/g, '\n').trim();
   const fm: Record<string, unknown> = {};
   for (const line of match[1].split('\n')) {
     const sep = line.indexOf(':');
     if (sep === -1) continue;
     const key = line.slice(0, sep).trim();
     const val = line.slice(sep + 1).trim();
+    if (!key) continue;
     fm[key] = val.startsWith('[') ? val.slice(1, -1).split(',').map(s => s.trim()) : val;
   }
-  return { fm, body: match[2] };
+  return { fm, rawFm, body: match[2] };
 }
 
 function buildHeader(fm: Record<string, unknown>): string {
   const lines: string[] = [];
   if (typeof fm.title === 'string' && fm.title) lines.push(`# ${fm.title}`);
-  const tags = normalizeTags(fm.tags);
-  if (tags.length > 0) lines.push(`Tags: ${tags.join(', ')}`);
   return lines.join('\n');
 }
 
