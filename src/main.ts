@@ -56,13 +56,24 @@ function toFreshnessTarget(target: OutputTarget): PackRecord['target'] | null {
 
 export default class ContextPackPlugin extends Plugin {
   settings!: PluginSettings;
-  private autoSyncDebounceTimers: Map<string, number> = new Map();
+  private autoSyncPendingPacks: Map<string, { pack: PackRecord; timer: number }> = new Map();
+
+  private flushPendingAutoSyncs(): void {
+    if (this.autoSyncPendingPacks.size === 0) return;
+    for (const [key, { pack, timer }] of this.autoSyncPendingPacks.entries()) {
+      window.clearTimeout(timer);
+      this.autoSyncPendingPacks.delete(key);
+      void this.reExportPack(pack, { silent: true }).catch(err => {
+        console.error('[AI Context Pack] Auto-export failed on flush:', err);
+      });
+    }
+  }
 
   onunload() {
-    for (const timer of this.autoSyncDebounceTimers.values()) {
+    for (const { timer } of this.autoSyncPendingPacks.values()) {
       window.clearTimeout(timer);
     }
-    this.autoSyncDebounceTimers.clear();
+    this.autoSyncPendingPacks.clear();
   }
 
   async onload() {
@@ -368,6 +379,16 @@ export default class ContextPackPlugin extends Plugin {
         void this.handleFileModifyForExport(file, cache);
       })
     );
+
+    this.registerDomEvent(window, 'visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        this.flushPendingAutoSyncs();
+      }
+    });
+
+    this.registerDomEvent(window, 'blur', () => {
+      this.flushPendingAutoSyncs();
+    });
 
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.freshnessAutoCheck) {
@@ -698,20 +719,20 @@ export default class ContextPackPlugin extends Plugin {
     if (affectedPacks.length === 0) return;
 
     // Debounce re-export for each affected pack
-    const debounceMs = this.settings.autoSyncDebounceMs ?? 3000;
+    const debounceMs = this.settings.autoSyncDebounceMs ?? 1000;
     for (const pack of affectedPacks) {
       const key = `${pack.source.type}:${pack.source.query}`;
-      const existingTimer = this.autoSyncDebounceTimers.get(key);
-      if (existingTimer !== undefined) {
-        window.clearTimeout(existingTimer);
+      const existing = this.autoSyncPendingPacks.get(key);
+      if (existing !== undefined) {
+        window.clearTimeout(existing.timer);
       }
       const timer = window.setTimeout(() => {
-        this.autoSyncDebounceTimers.delete(key);
+        this.autoSyncPendingPacks.delete(key);
         void this.reExportPack(pack, { silent: true }).catch(err => {
           console.error('[AI Context Pack] Auto-export failed:', err);
         });
       }, debounceMs);
-      this.autoSyncDebounceTimers.set(key, timer);
+      this.autoSyncPendingPacks.set(key, { pack, timer });
     }
   }
 
@@ -727,20 +748,20 @@ export default class ContextPackPlugin extends Plugin {
       }
     }
     if (affectedPacks.length === 0) return;
-    const debounceMs = this.settings.autoSyncDebounceMs ?? 3000;
+    const debounceMs = this.settings.autoSyncDebounceMs ?? 1000;
     for (const pack of affectedPacks) {
       const key = `${pack.source.type}:${pack.source.query}`;
-      const existingTimer = this.autoSyncDebounceTimers.get(key);
-      if (existingTimer !== undefined) {
-        window.clearTimeout(existingTimer);
+      const existing = this.autoSyncPendingPacks.get(key);
+      if (existing !== undefined) {
+        window.clearTimeout(existing.timer);
       }
       const timer = window.setTimeout(() => {
-        this.autoSyncDebounceTimers.delete(key);
+        this.autoSyncPendingPacks.delete(key);
         void this.reExportPack(pack, { silent: true }).catch(err => {
           console.error('[AI Context Pack] Auto-export failed on delete:', err);
         });
       }, debounceMs);
-      this.autoSyncDebounceTimers.set(key, timer);
+      this.autoSyncPendingPacks.set(key, { pack, timer });
     }
   }
 
@@ -1318,6 +1339,7 @@ export default class ContextPackPlugin extends Plugin {
           openAiUrl: silent ? false : this.settings.openAiUrl,
           includeDateInFilename: this.settings.includeDateInFilename,
           silent,
+          showNotice: this.settings.autoSyncShowNotice,
         });
       }
       if (packMeta) {
@@ -1350,12 +1372,18 @@ export default class ContextPackPlugin extends Plugin {
       const path = folder ? `${folder}/${filename}` : filename;
       const existing = this.app.vault.getAbstractFileByPath(path);
       if (existing instanceof TFile) {
+        const currentContent = await this.app.vault.cachedRead(existing);
+        if (currentContent === content) {
+          return;
+        }
         await this.app.vault.modify(existing, content);
       } else {
         await this.app.vault.create(path, content);
       }
       if (silent) {
-        new Notice(`🔄 [AI Context Pack] Auto-updated: ${slug}`, 2500);
+        if (this.settings.autoSyncShowNotice) {
+          new Notice(`🔄 [AI Context Pack] Auto-updated: ${slug}`, 2500);
+        }
       } else {
         new Notice(`${t('notice_pack_done', noteCount)}\n📄 ${path}`, 8000);
       }

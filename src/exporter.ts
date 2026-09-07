@@ -115,6 +115,19 @@ async function saveToVault(app: App, folder: string, filename: string, blob: Blo
   const path = folder ? `${folder}/${filename}` : filename;
   const existing = app.vault.getAbstractFileByPath(path);
   if (existing && existing instanceof TFile) {
+    const current = await app.vault.readBinary(existing);
+    const currentView = new Uint8Array(current);
+    const newView = new Uint8Array(buffer);
+    if (currentView.length === newView.length) {
+      let identical = true;
+      for (let i = 0; i < currentView.length; i++) {
+        if (currentView[i] !== newView[i]) {
+          identical = false;
+          break;
+        }
+      }
+      if (identical) return; // Unchanged content, avoid touching disk or mtime
+    }
     await app.vault.modifyBinary(existing, buffer);
   } else {
     await app.vault.createBinary(path, buffer);
@@ -148,6 +161,7 @@ export interface AiOutputOptions {
   openAiUrl: boolean;
   includeDateInFilename?: boolean;
   silent?: boolean;
+  showNotice?: boolean;
 }
 
 export async function buildAiOutput(
@@ -163,10 +177,15 @@ export async function buildAiOutput(
   const filename = options.includeDateInFilename
     ? `pack-${slug}-${aiLabel}-${date}.md`
     : `pack-${slug}-${aiLabel}.md`;
-  let savedPath = '';
 
-  if (!options.silent && options.copyToClipboard && preset.copyToClipboard) {
-    await copyToClipboard(content);
+  let savedPath: string | undefined;
+
+  if (options.copyToClipboard && preset.copyToClipboard && !options.silent) {
+    try {
+      await copyToClipboard(content);
+    } catch (err) {
+      new Notice(`Copy failed: ${err instanceof Error ? err.message : String(err)}`, 8000);
+    }
   }
 
   if (options.saveToFile && preset.saveToFile) {
@@ -179,7 +198,7 @@ export async function buildAiOutput(
   }
 
   if (options.silent) {
-    if (savedPath) {
+    if (savedPath && options.showNotice) {
       new Notice(`🔄 [AI Context Pack] Auto-updated: ${slug}`, 2500);
     }
   } else {

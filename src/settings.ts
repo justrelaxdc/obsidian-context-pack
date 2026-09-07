@@ -94,6 +94,7 @@ export interface PluginSettings {
   includeDateInFilename: boolean;
   autoSyncPacks: boolean;
   autoSyncDebounceMs: number;
+  autoSyncShowNotice: boolean;
   excludedFolders: string;
   workspaces: WorkspaceConfig[];
   workspaceViewDark: boolean;
@@ -108,7 +109,8 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   contextPackOutputFolder: '',
   includeDateInFilename: false,
   autoSyncPacks: true,
-  autoSyncDebounceMs: 3000,
+  autoSyncDebounceMs: 1000,
+  autoSyncShowNotice: false,
   excludedFolders: '0. 📁 Files',
   customRules: [],
   dailyNotesAutoDetect: true,
@@ -218,11 +220,33 @@ export class SettingsTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Auto-reexport on #export/... Tagged Notes')
-      .setDesc('Automatically re-exports matching Context Packs in the background when notes with #export/... tags are edited (debounced 3s, silent mode).')
+      .setDesc('Automatically re-exports matching Context Packs in the background when notes with #export/... tags are edited.')
       .addToggle(toggle => toggle
         .setValue(this.plugin.settings.autoSyncPacks)
         .onChange(async value => {
           this.plugin.settings.autoSyncPacks = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Auto-export Debounce (seconds)')
+      .setDesc('Quiet period before re-exporting context packs after editing a tagged note (default: 1 second).')
+      .addSlider(slider => slider
+        .setLimits(1, 10, 1)
+        .setValue(Math.round((this.plugin.settings.autoSyncDebounceMs ?? 1000) / 1000))
+        .setDynamicTooltip()
+        .onChange(async val => {
+          this.plugin.settings.autoSyncDebounceMs = val * 1000;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Show Notice on Background Export')
+      .setDesc('Displays a subtle notice in Obsidian when Context Packs are automatically re-exported in the background (disabled by default for silent operation).')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.autoSyncShowNotice ?? false)
+        .onChange(async value => {
+          this.plugin.settings.autoSyncShowNotice = value;
           await this.plugin.saveSettings();
         }));
 
