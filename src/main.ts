@@ -600,6 +600,17 @@ export default class ContextPackPlugin extends Plugin {
       (p) => packKey(p.source, p.target) === key,
     );
     if (idx >= 0) {
+      const existing = this.settings.packRegistry[idx];
+      // Preserve original createdAt to avoid unnecessary data.json churn
+      record.createdAt = existing.createdAt || record.createdAt;
+
+      // Check if files or metadata actually changed
+      const filesUnchanged = existing.files.length === record.files.length &&
+        existing.files.every((f, i) => f.path === record.files[i]?.path && f.mtime === record.files[i]?.mtime && f.size === record.files[i]?.size);
+
+      if (filesUnchanged && existing.name === record.name) {
+        return; // Exact same content and files, skip modifying data.json
+      }
       this.settings.packRegistry[idx] = record;
     } else {
       this.settings.packRegistry.push(record);
@@ -652,6 +663,7 @@ export default class ContextPackPlugin extends Plugin {
 
   private async handleFileModifyForExport(file: TAbstractFile, passedCache?: CachedMetadata): Promise<void> {
     if (!this.settings.autoSyncPacks) return;
+    if (!this.app.workspace.layoutReady) return;
     if (!(file instanceof TFile) || file.extension !== 'md') return;
 
     // 1. Exclude the output folder dynamically from settings
@@ -720,9 +732,18 @@ export default class ContextPackPlugin extends Plugin {
 
     // Debounce re-export for each affected pack
     const debounceMs = this.settings.autoSyncDebounceMs ?? 1000;
+    const isAstCachePass = passedCache !== undefined;
+
     for (const pack of affectedPacks) {
       const key = `${pack.source.type}:${pack.source.query}`;
       const existing = this.autoSyncPendingPacks.get(key);
+
+      // If a timer is already running and this is just an AST cache resolution pass,
+      // do not postpone the deadline — let the original 1s timer fire!
+      if (existing !== undefined && isAstCachePass) {
+        continue;
+      }
+
       if (existing !== undefined) {
         window.clearTimeout(existing.timer);
       }
@@ -738,6 +759,7 @@ export default class ContextPackPlugin extends Plugin {
 
   private handleFileDeleteForExport(file: TAbstractFile): void {
     if (!this.settings.autoSyncPacks) return;
+    if (!this.app.workspace.layoutReady) return;
     const affectedPacks: PackRecord[] = [];
     for (const pack of this.settings.packRegistry) {
       if (pack.source.type === 'tag') {
