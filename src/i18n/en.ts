@@ -6,6 +6,7 @@ export default {
   cmd_create_moc_tag: 'Create MOC from tag',
   cmd_create_ai_moc:  'Create AI MOC from note',
   cmd_pack_moc:       'Create Context Pack from MOC',
+  cmd_regenerate_all: 'Regenerate all Context Packs',
 
   ribbon_tooltip:        'AI Context Pack / Export',
   ribbon_pack_folder:    'Context Pack (choose folder)',

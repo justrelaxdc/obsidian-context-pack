@@ -6,6 +6,7 @@ export default {
   cmd_create_moc_tag: 'タグからMOCを作成',
   cmd_create_ai_moc:  'AI MOCを作成: ノートから',
   cmd_pack_moc:       'MOCからContext Packを作成',
+  cmd_regenerate_all: 'すべてのコンテキストパックを再生成',
 
   ribbon_tooltip:        'AI Context Pack / エクスポート',
   ribbon_pack_folder:    'Context Pack（フォルダを選択）',

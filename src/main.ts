@@ -201,6 +201,12 @@ export default class ContextPackPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: 'regenerate-all-packs',
+      name: t('cmd_regenerate_all'),
+      callback: () => void this.regenerateAllPacks(),
+    });
+
+    this.addCommand({
       id: 'create-moc-tag',
       name: t('cmd_create_moc_tag'),
       callback: () => this.createMocFromTag(),
@@ -805,6 +811,29 @@ export default class ContextPackPlugin extends Plugin {
       }
       default:
         if (!options?.silent) new Notice(t('ws_notice_reexport_unsupported'));
+    }
+  }
+
+  async regenerateAllPacks(): Promise<void> {
+    const packs = this.settings.packRegistry ?? [];
+    if (packs.length === 0) {
+      new Notice(t('ws_empty_title') || 'No context packs registered');
+      return;
+    }
+    const notice = new Notice(`🔄 Regenerating ${packs.length} context pack${packs.length === 1 ? '' : 's'}...`, 0);
+    let count = 0;
+    try {
+      for (const pack of packs) {
+        notice.setMessage(`🔄 Regenerating packs (${count + 1}/${packs.length}): ${pack.name}...`);
+        await this.reExportPack(pack, { silent: true });
+        count++;
+      }
+      notice.hide();
+      new Notice(`✅ Successfully regenerated ${count} context pack${count === 1 ? '' : 's'}!`, 4000);
+    } catch (err) {
+      notice.hide();
+      console.error('[AI Context Pack] Failed to regenerate all packs:', err);
+      new Notice(`⚠️ Failed to regenerate packs: ${err instanceof Error ? err.message : String(err)}`, 8000);
     }
   }
 
