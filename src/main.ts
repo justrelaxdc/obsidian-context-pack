@@ -597,6 +597,20 @@ export default class ContextPackPlugin extends Plugin {
     }
   }
 
+  isPathExcluded(path: string): boolean {
+    const raw = this.settings.excludedFolders;
+    if (!raw) return false;
+    const normalizedPath = path.replace(/\\/g, '/');
+    const excludedList = raw
+      .split(',')
+      .map(s => s.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''))
+      .filter(Boolean);
+
+    return excludedList.some(folder =>
+      normalizedPath === folder || normalizedPath.startsWith(folder + '/')
+    );
+  }
+
   private async handleFileModifyForExport(file: TAbstractFile): Promise<void> {
     if (!this.settings.autoSyncPacks) return;
     if (!(file instanceof TFile) || file.extension !== 'md') return;
@@ -604,6 +618,11 @@ export default class ContextPackPlugin extends Plugin {
     // 1. Exclude the output folder dynamically from settings
     const outFolder = this.settings.contextPackOutputFolder || this.settings.outputFolder;
     if (outFolder && (file.path.startsWith(outFolder + '/') || file.path === outFolder)) {
+      return;
+    }
+
+    // 2. Exclude folders configured in settings (e.g. templates, assets)
+    if (this.isPathExcluded(file.path)) {
       return;
     }
 
@@ -832,10 +851,11 @@ export default class ContextPackPlugin extends Plugin {
   private getAllTags(): string[] {
     const tagSet = new Set<string>();
     for (const file of this.app.vault.getMarkdownFiles()) {
+      if (this.isPathExcluded(file.path)) continue;
       const cache = this.app.metadataCache.getFileCache(file);
       if (!cache) continue;
       for (const ref of cache.tags ?? []) tagSet.add(ref.tag.replace(/^#/, ''));
-      const fmTags: unknown = cache.frontmatter?.['tags'];
+      const fmTags: unknown = cache.frontmatter?.['tags'] ?? cache.frontmatter?.['tag'];
       if (Array.isArray(fmTags)) {
         for (const t of fmTags) { if (typeof t === 'string') tagSet.add(t.replace(/^#/, '')); }
       } else if (typeof fmTags === 'string' && fmTags) {
@@ -847,9 +867,10 @@ export default class ContextPackPlugin extends Plugin {
 
   private getFilesByTag(tag: string): TFile[] {
     return this.app.vault.getMarkdownFiles().filter(f => {
+      if (this.isPathExcluded(f.path)) return false;
       const cache = this.app.metadataCache.getFileCache(f);
       const inlineTags = cache?.tags?.map(t => t.tag.replace('#', '')) ?? [];
-      const fmTagsRaw: unknown = cache?.frontmatter?.['tags'];
+      const fmTagsRaw: unknown = cache?.frontmatter?.['tags'] ?? cache?.frontmatter?.['tag'];
       const fmTags: string[] = Array.isArray(fmTagsRaw) ? (fmTagsRaw as string[]) : (fmTagsRaw != null ? [String(fmTagsRaw)] : []);
       const allTags = [...inlineTags, ...fmTags];
       return allTags.includes(tag);
@@ -934,7 +955,7 @@ export default class ContextPackPlugin extends Plugin {
 
   private async packFromFolderPath(folderPath: string, options?: { silent?: boolean }) {
     const files = this.app.vault.getMarkdownFiles()
-      .filter(f => f.path.startsWith(folderPath + '/'));
+      .filter(f => f.path.startsWith(folderPath + '/') && !this.isPathExcluded(f.path));
 
     if (files.length === 0) {
       if (!options?.silent) new Notice(t('notice_no_files'));
@@ -1020,7 +1041,7 @@ export default class ContextPackPlugin extends Plugin {
         const resolved = this.app.metadataCache.getFirstLinkpathDest(link, moc.path);
         linked = resolved instanceof TFile ? resolved : null;
       }
-      if (linked && linked.extension === 'md' && !seen.has(linked.path)) {
+      if (linked && linked.extension === 'md' && !seen.has(linked.path) && !this.isPathExcluded(linked.path)) {
         seen.add(linked.path);
         allLinkedFiles.push(linked);
       }

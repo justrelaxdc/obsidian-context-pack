@@ -94,6 +94,7 @@ export interface PluginSettings {
   includeDateInFilename: boolean;
   autoSyncPacks: boolean;
   autoSyncDebounceMs: number;
+  excludedFolders: string;
   workspaces: WorkspaceConfig[];
   workspaceViewDark: boolean;
 }
@@ -108,6 +109,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   includeDateInFilename: false,
   autoSyncPacks: true,
   autoSyncDebounceMs: 3000,
+  excludedFolders: '0. 📁 Files',
   customRules: [],
   dailyNotesAutoDetect: true,
   dailyNotesFolder: '',
@@ -231,6 +233,17 @@ export class SettingsTab extends PluginSettingTab {
         .setValue(this.plugin.settings.includeDateInFilename)
         .onChange(async value => {
           this.plugin.settings.includeDateInFilename = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Excluded Folders')
+      .setDesc('Comma-separated list of folders to exclude from Context Pack exports (e.g. 0. 📁 Files, Templates). Notes inside these folders will never be included in packs even if tagged.')
+      .addText(text => text
+        .setPlaceholder('e.g. 0. 📁 Files, Templates')
+        .setValue(this.plugin.settings.excludedFolders)
+        .onChange(async value => {
+          this.plugin.settings.excludedFolders = value;
           await this.plugin.saveSettings();
         }));
 
