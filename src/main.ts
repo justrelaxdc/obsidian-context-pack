@@ -656,7 +656,7 @@ export default class ContextPackPlugin extends Plugin {
 
     const fm = cache?.frontmatter;
     if (fm) {
-      const rawTags = fm.tags ?? fm.tag;
+      const rawTags: unknown = (fm as Record<string, unknown>)['tags'] ?? (fm as Record<string, unknown>)['tag'];
       const list = Array.isArray(rawTags) ? rawTags : (rawTags ? [rawTags] : []);
       for (const item of list) {
         fileTags.add(String(item).replace(/^#/, '').trim().toLowerCase());
@@ -705,13 +705,11 @@ export default class ContextPackPlugin extends Plugin {
       if (existingTimer !== undefined) {
         window.clearTimeout(existingTimer);
       }
-      const timer = window.setTimeout(async () => {
+      const timer = window.setTimeout(() => {
         this.autoSyncDebounceTimers.delete(key);
-        try {
-          await this.reExportPack(pack, { silent: true });
-        } catch (err) {
+        void this.reExportPack(pack, { silent: true }).catch(err => {
           console.error('[AI Context Pack] Auto-export failed:', err);
-        }
+        });
       }, debounceMs);
       this.autoSyncDebounceTimers.set(key, timer);
     }
@@ -736,13 +734,11 @@ export default class ContextPackPlugin extends Plugin {
       if (existingTimer !== undefined) {
         window.clearTimeout(existingTimer);
       }
-      const timer = window.setTimeout(async () => {
+      const timer = window.setTimeout(() => {
         this.autoSyncDebounceTimers.delete(key);
-        try {
-          await this.reExportPack(pack, { silent: true });
-        } catch (err) {
+        void this.reExportPack(pack, { silent: true }).catch(err => {
           console.error('[AI Context Pack] Auto-export failed on delete:', err);
-        }
+        });
       }, debounceMs);
       this.autoSyncDebounceTimers.set(key, timer);
     }
@@ -1078,7 +1074,7 @@ export default class ContextPackPlugin extends Plugin {
     }
   }
 
-  private async packFromMoc(moc: TFile) {
+  private async packFromMoc(moc: TFile, options?: { silent?: boolean }) {
     const cache = this.app.metadataCache.getFileCache(moc);
     const links = cache?.links?.map(l => l.link) ?? [];
 
