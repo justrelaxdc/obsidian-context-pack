@@ -9,21 +9,25 @@ export async function buildContextPack(
   onProgress?: (current: number, total: number) => void,
   signal?: AbortSignal
 ): Promise<string> {
+  const targetFiles = meta.source.startsWith('moc:')
+    ? files
+    : [...files].sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
+
   const today = window.moment().format('YYYY-MM-DD');
   const headerTitle = meta.titleOverride ?? `Context Pack: ${meta.title}`;
   const sections: string[] = [`# ${headerTitle}`];
   if (!meta.omitMeta) {
-    sections.push(`Generated: ${today}`, `Source: ${meta.source}`, `Notes: ${files.length}`);
+    sections.push(`Generated: ${today}`, `Source: ${meta.source}`, `Notes: ${targetFiles.length}`);
   }
   if (meta.description) {
     sections.push(meta.description);
   }
 
-  for (let i = 0; i < files.length; i++) {
+  for (let i = 0; i < targetFiles.length; i++) {
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
-    const file = files[i];
+    const file = targetFiles[i];
     if (i % 10 === 0) {
-      onProgress?.(i + 1, files.length);
+      onProgress?.(i + 1, targetFiles.length);
       await new Promise(resolve => window.setTimeout(resolve, 0));
     }
     const raw = await app.vault.read(file);

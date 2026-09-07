@@ -70,8 +70,8 @@ export async function exportVault(
 
 function getMarkdownFiles(app: App, targetFolder: string): TFile[] {
   const all = app.vault.getMarkdownFiles();
-  if (!targetFolder) return all;
-  return all.filter(f => f.path.startsWith(targetFolder + '/') || f.path === targetFolder);
+  const filtered = !targetFolder ? all : all.filter(f => f.path.startsWith(targetFolder + '/') || f.path === targetFolder);
+  return filtered.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
 export async function exportSingleNote(app: App, file: TFile, options: FormatOptions): Promise<void> {

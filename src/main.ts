@@ -998,15 +998,17 @@ export default class ContextPackPlugin extends Plugin {
   }
 
   private getFilesByTag(tag: string): TFile[] {
-    return this.app.vault.getMarkdownFiles().filter(f => {
-      if (this.isPathExcluded(f.path)) return false;
-      const cache = this.app.metadataCache.getFileCache(f);
-      const inlineTags = cache?.tags?.map(t => t.tag.replace('#', '')) ?? [];
-      const fmTagsRaw: unknown = cache?.frontmatter?.['tags'] ?? cache?.frontmatter?.['tag'];
-      const fmTags: string[] = Array.isArray(fmTagsRaw) ? (fmTagsRaw as string[]) : (fmTagsRaw != null ? [String(fmTagsRaw)] : []);
-      const allTags = [...inlineTags, ...fmTags];
-      return allTags.includes(tag);
-    });
+    return this.app.vault.getMarkdownFiles()
+      .filter(f => {
+        if (this.isPathExcluded(f.path)) return false;
+        const cache = this.app.metadataCache.getFileCache(f);
+        const inlineTags = cache?.tags?.map(t => t.tag.replace('#', '')) ?? [];
+        const fmTagsRaw: unknown = cache?.frontmatter?.['tags'] ?? cache?.frontmatter?.['tag'];
+        const fmTags: string[] = Array.isArray(fmTagsRaw) ? (fmTagsRaw as string[]) : (fmTagsRaw != null ? [String(fmTagsRaw)] : []);
+        const allTags = [...inlineTags, ...fmTags];
+        return allTags.includes(tag);
+      })
+      .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
   }
 
   private async saveMoc(filename: string, content: string, noteCount: number) {
@@ -1087,7 +1089,8 @@ export default class ContextPackPlugin extends Plugin {
 
   private async packFromFolderPath(folderPath: string, options?: { silent?: boolean }) {
     const files = this.app.vault.getMarkdownFiles()
-      .filter(f => f.path.startsWith(folderPath + '/') && !this.isPathExcluded(f.path));
+      .filter(f => f.path.startsWith(folderPath + '/') && !this.isPathExcluded(f.path))
+      .sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
 
     if (files.length === 0) {
       if (!options?.silent) new Notice(t('notice_no_files'));
