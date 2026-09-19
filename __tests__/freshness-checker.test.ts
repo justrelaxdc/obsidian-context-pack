@@ -1,6 +1,6 @@
 import { TFile } from 'obsidian';
-import { checkPack, packKey, buildPackRecord } from '../src/freshness/checker';
-import type { PackRecord, FreshnessSettings } from '../src/freshness/types';
+import { checkPack, packKey, buildPackRecord, getPackSlug } from '../src/freshness/checker';
+import { type PackRecord, type FreshnessSettings, formatTokenBudget } from '../src/freshness/types';
 
 const DEFAULT_SETTINGS: FreshnessSettings = { warnThreshold: 0.01, staleThreshold: 0.20 };
 
@@ -30,7 +30,12 @@ function makeApp(files: TFile[], tagMap: Record<string, string[]> = {}): import(
 }
 
 function makePack(files: TFile[], sourceType: PackRecord['source']['type'] = 'folder', query = 'Notes'): PackRecord {
-  return buildPackRecord('Test Pack', { type: sourceType, query }, 'claude', files);
+  return {
+    name: 'Test Pack',
+    source: { type: sourceType, query },
+    target: 'claude',
+    files: files.map(f => ({ path: f.path, mtime: f.stat.mtime, size: f.stat.size })),
+  };
 }
 
 describe('packKey', () => {
@@ -41,11 +46,11 @@ describe('packKey', () => {
 });
 
 describe('buildPackRecord', () => {
-  test('snapshots file stats', () => {
+  test('snapshots file paths', () => {
     const files = [makeFile('Notes/a.md', 1000, 500)];
     const record = buildPackRecord('MyPack', { type: 'folder', query: 'Notes' }, 'chatgpt', files);
     expect(record.files).toHaveLength(1);
-    expect(record.files[0]).toEqual({ path: 'Notes/a.md', mtime: 1000, size: 500 });
+    expect(record.files[0]).toEqual({ path: 'Notes/a.md' });
     expect(record.target).toBe('chatgpt');
   });
 });
@@ -156,5 +161,26 @@ describe('checkPack — tag source', () => {
     const result = await checkPack(app, pack, DEFAULT_SETTINGS);
     expect(result.level).toBe('fresh');
     expect(result.unchanged).toContain('Notes/tagged.md');
+    expect(result.contextLimit).toBe(128000);
+  });
+});
+
+describe('formatTokenBudget', () => {
+  test('formats numbers into k and M suffixes', () => {
+    expect(formatTokenBudget(500)).toBe('500');
+    expect(formatTokenBudget(1500)).toBe('1.5k');
+    expect(formatTokenBudget(26500)).toBe('26.5k');
+    expect(formatTokenBudget(200000)).toBe('200k');
+    expect(formatTokenBudget(1000000)).toBe('1M');
+    expect(formatTokenBudget(1500000)).toBe('1.5M');
+  });
+});
+
+describe('getPackSlug', () => {
+  test('generates expected slug for tag, folder, moc, daily', () => {
+    expect(getPackSlug({ type: 'tag', query: 'export/WooPilot' })).toBe('tag-export-WooPilot');
+    expect(getPackSlug({ type: 'folder', query: 'Projects/Test' })).toBe('folder-Test');
+    expect(getPackSlug({ type: 'moc', query: 'Indexes/Tech MOC.md' })).toBe('moc-Tech MOC');
+    expect(getPackSlug({ type: 'daily', query: '2026-09-01..2026-09-14' })).toBe('daily-notes');
   });
 });

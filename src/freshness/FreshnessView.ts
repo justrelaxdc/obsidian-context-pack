@@ -1,6 +1,6 @@
 import { ItemView, WorkspaceLeaf, Notice, moment } from 'obsidian';
 import type ContextPackPlugin from '../main';
-import { type PackRecord, type PackCheckResult, type FreshnessLevel, TARGET_LABEL } from './types';
+import { type PackRecord, type PackCheckResult, type FreshnessLevel, TARGET_LABEL, formatTokenBudget } from './types';
 import { checkAllPacks, packKey } from './checker';
 import { t } from '../i18n';
 
@@ -32,7 +32,8 @@ export class FreshnessView extends ItemView {
     this.loading = true;
     this.render();
     const packs = this.plugin.settings.packRegistry ?? [];
-    this.results = await checkAllPacks(this.app, packs, this.plugin.settings.freshnessSettings);
+    const outputFolder = this.plugin.settings.contextPackOutputFolder || this.plugin.settings.outputFolder || '';
+    this.results = await checkAllPacks(this.app, packs, this.plugin.settings.freshnessSettings, outputFolder);
     this.results.sort((a, b) => a.freshnessScore - b.freshnessScore);
     this.lastChecked = Date.now();
     this.loading = false;
@@ -145,13 +146,52 @@ export class FreshnessView extends ItemView {
     rowChip.createEl('span', { cls: `cp-freshness-chip-dot cp-freshness-dot--${result.level}` });
     rowChip.createEl('span', { text: ` ${levelLabel(result.level)}` });
 
-    // ── Count
-    const countEl = body.createEl('div', { cls: 'cp-freshness-count' });
+    // ── Stat line (Note count + Token budget badge)
+    const statLine = body.createEl('div', { cls: 'cp-freshness-stat-row' });
+    const countEl = statLine.createEl('span', { cls: 'cp-freshness-count' });
     countEl.setText(this.buildCountText(result));
+
+    if (result.tokenCount !== undefined && result.contextLimit !== undefined) {
+      const pct = (result.tokenCount / result.contextLimit) * 100;
+      const pctDisplay = pct < 1 && pct > 0 ? '<1%' : `${Math.round(pct)}%`;
+      const tokenText = `~${formatTokenBudget(result.tokenCount)} / ${formatTokenBudget(result.contextLimit)} (${pctDisplay})`;
+
+      const badgeCls = pct > 90
+        ? 'cp-freshness-token-badge cp-freshness-token-badge--danger'
+        : pct > 70
+        ? 'cp-freshness-token-badge cp-freshness-token-badge--warn'
+        : 'cp-freshness-token-badge';
+
+      const tokenBadge = statLine.createEl('span', {
+        cls: badgeCls,
+        text: tokenText,
+      });
+      tokenBadge.setAttribute(
+        'title',
+        `${result.tokenCount.toLocaleString()} / ${result.contextLimit.toLocaleString()} tokens (${pct.toFixed(1)}% of ${TARGET_LABEL[pack.target]} context window)`
+      );
+
+      // ── Token progress bar
+      const barContainer = body.createEl('div', { cls: 'cp-freshness-token-bar' });
+      barContainer.setAttribute(
+        'title',
+        `${result.tokenCount.toLocaleString()} / ${result.contextLimit.toLocaleString()} tokens (${pct.toFixed(1)}%)`
+      );
+      const fillCls = pct > 90
+        ? 'cp-freshness-token-fill cp-freshness-token-fill--danger'
+        : pct > 70
+        ? 'cp-freshness-token-fill cp-freshness-token-fill--warn'
+        : 'cp-freshness-token-fill';
+
+      const fill = barContainer.createEl('div', { cls: fillCls });
+      fill.style.width = `${Math.min(100, Math.max(1, pct))}%`;
+    }
 
     // ── Meta + delete button
     const metaLine = body.createEl('div', { cls: 'cp-freshness-meta' });
-    metaLine.createEl('span', { text: t('freshness_created_at', moment(pack.createdAt).fromNow()) });
+    if (pack.createdAt) {
+      metaLine.createEl('span', { text: t('freshness_created_at', moment(pack.createdAt).fromNow()) });
+    }
     const deleteBtn = metaLine.createEl('button', {
       cls: 'cp-freshness-delete-btn',
       text: '✕',

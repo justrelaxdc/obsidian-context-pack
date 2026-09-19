@@ -2,8 +2,8 @@ import type { OutputSelectorState } from '../types';
 
 export interface FileRecord {
   path: string;
-  mtime: number;
-  size: number;
+  mtime?: number;
+  size?: number;
 }
 
 export interface PackRecord {
@@ -13,7 +13,7 @@ export interface PackRecord {
     query: string;
   };
   target: 'chatgpt' | 'claude' | 'gemini' | 'notebooklm';
-  createdAt: number;
+  createdAt?: number;
   files: FileRecord[];
   outputSelectorState?: OutputSelectorState;
 }
@@ -29,6 +29,8 @@ export interface PackCheckResult {
   updated: string[];
   added: string[];
   missing: string[];
+  tokenCount?: number;
+  contextLimit?: number;
 }
 
 export interface FreshnessSettings {
@@ -47,3 +49,26 @@ export const TARGET_LABEL: Record<PackRecord['target'], string> = {
   gemini:     'Gemini',
   notebooklm: 'NotebookLM',
 };
+
+export const TARGET_CONTEXT_LIMIT: Record<PackRecord['target'], number> = {
+  chatgpt:    128_000,
+  claude:     200_000,
+  gemini:   1_000_000,
+  notebooklm: 500_000,
+};
+
+export function formatTokenBudget(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    const val = tokens / 1_000_000;
+    return `${val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)}M`;
+  }
+  if (tokens >= 10_000) {
+    const val = tokens / 1_000;
+    return `${val % 1 === 0 ? val.toFixed(0) : val.toFixed(1)}k`;
+  }
+  if (tokens >= 1_000) {
+    const val = tokens / 1_000;
+    return `${val.toFixed(1)}k`;
+  }
+  return String(tokens);
+}

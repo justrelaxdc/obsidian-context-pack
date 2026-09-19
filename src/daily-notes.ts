@@ -156,8 +156,7 @@ export async function buildDailyPack(
   sections.push(
     '# Daily Notes Context Pack',
     `${t('pack_period')}: ${startStr} – ${endStr}`,
-    t('pack_count', filtered.length),
-    `${t('pack_generated')}: ${now}`
+    t('pack_count', filtered.length)
   );
 
   for (const file of filtered) {
@@ -198,11 +197,9 @@ export function buildWeeklyHeader(startDate: Date, endDate: Date, count: number)
   const title = t('weekly_title', m.year(), m.month() + 1, weekNum);
   const startStr = moment(startDate).format('YYYY-MM-DD (ddd)');
   const endStr = moment(endDate).format('YYYY-MM-DD (ddd)');
-  const now = moment().format('YYYY-MM-DD HH:mm');
   return [
     `# ${t('weekly_header')}: ${title}`,
     `${t('pack_period')}: ${startStr} – ${endStr}`,
     t('weekly_count', count),
-    `${t('pack_generated')}: ${now}`,
   ].join('\n');
 }

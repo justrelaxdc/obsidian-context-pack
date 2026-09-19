@@ -93,6 +93,7 @@ export interface PluginSettings {
   epubSortStrategy: EpubSortStrategy;
   includeDateInFilename: boolean;
   autoSyncPacks: boolean;
+  autoRegenerateOnStartup: boolean;
   autoSyncDebounceMs: number;
   autoSyncShowNotice: boolean;
   excludedFolders: string;
@@ -109,6 +110,7 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   contextPackOutputFolder: '',
   includeDateInFilename: false,
   autoSyncPacks: true,
+  autoRegenerateOnStartup: false,
   autoSyncDebounceMs: 1000,
   autoSyncShowNotice: false,
   excludedFolders: '0. 📁 Files',
@@ -225,6 +227,16 @@ export class SettingsTab extends PluginSettingTab {
         .setValue(this.plugin.settings.autoSyncPacks)
         .onChange(async value => {
           this.plugin.settings.autoSyncPacks = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName('Regenerate Packs on Startup')
+      .setDesc('Automatically regenerates all context packs in the background when Obsidian finishes loading. Unchanged packs and data.json are not touched on disk (zero Git sync churn).')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.autoRegenerateOnStartup ?? false)
+        .onChange(async value => {
+          this.plugin.settings.autoRegenerateOnStartup = value;
           await this.plugin.saveSettings();
         }));
 

@@ -40,6 +40,7 @@ export function formatForNotebookLM(raw: string, options: FormatOptions): string
     }
   }
 
+  result = collapseBlankLines(result);
   return result.trim();
 }
 

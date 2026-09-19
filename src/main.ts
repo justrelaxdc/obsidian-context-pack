@@ -397,6 +397,9 @@ export default class ContextPackPlugin extends Plugin {
     });
 
     this.app.workspace.onLayoutReady(() => {
+      if (this.settings.autoRegenerateOnStartup) {
+        void this.regenerateAllPacks({ silent: true });
+      }
       if (this.settings.freshnessAutoCheck) {
         const leaves = this.app.workspace.getLeavesOfType(FRESHNESS_VIEW_TYPE);
         if (leaves.length > 0) {
@@ -421,6 +424,13 @@ export default class ContextPackPlugin extends Plugin {
     }
     if (!Array.isArray(this.settings.packRegistry)) {
       this.settings.packRegistry = [];
+    } else {
+      for (const pack of this.settings.packRegistry) {
+        delete (pack as Record<string, unknown>).createdAt;
+        if (Array.isArray(pack.files)) {
+          pack.files = pack.files.map(f => ({ path: f.path }));
+        }
+      }
     }
     if (!this.settings.freshnessSettings) {
       this.settings.freshnessSettings = DEFAULT_SETTINGS.freshnessSettings;
@@ -607,12 +617,10 @@ export default class ContextPackPlugin extends Plugin {
     );
     if (idx >= 0) {
       const existing = this.settings.packRegistry[idx];
-      // Preserve original createdAt to avoid unnecessary data.json churn
-      record.createdAt = existing.createdAt || record.createdAt;
 
-      // Check if files or metadata actually changed
+      // Check if files or metadata actually changed (comparing file paths only, ignoring timestamps)
       const filesUnchanged = existing.files.length === record.files.length &&
-        existing.files.every((f, i) => f.path === record.files[i]?.path && f.mtime === record.files[i]?.mtime && f.size === record.files[i]?.size);
+        existing.files.every((f, i) => f.path === record.files[i]?.path);
 
       if (filesUnchanged && existing.name === record.name) {
         return; // Exact same content and files, skip modifying data.json
@@ -809,31 +817,50 @@ export default class ContextPackPlugin extends Plugin {
         if (moc instanceof TFile) await this.packFromMoc(moc, options);
         break;
       }
+      case 'daily': {
+        const range = getDateRange(this.settings.dailyNotesDefaultRange);
+        await this.runDailyNotesPack(
+          range.start,
+          range.end,
+          this.settings.dailyNotesExcludeTags,
+          this.settings.dailyNotesSortOrder as 'asc' | 'desc',
+          false,
+          undefined,
+          options
+        );
+        break;
+      }
       default:
         if (!options?.silent) new Notice(t('ws_notice_reexport_unsupported'));
     }
   }
 
-  async regenerateAllPacks(): Promise<void> {
+  async regenerateAllPacks(options?: { silent?: boolean }): Promise<void> {
     const packs = this.settings.packRegistry ?? [];
     if (packs.length === 0) {
-      new Notice(t('ws_empty_title') || 'No context packs registered');
+      if (!options?.silent) new Notice(t('ws_empty_title') || 'No context packs registered');
       return;
     }
-    const notice = new Notice(`🔄 Regenerating ${packs.length} context pack${packs.length === 1 ? '' : 's'}...`, 0);
+    const notice = options?.silent ? null : new Notice(`🔄 Regenerating ${packs.length} context pack${packs.length === 1 ? '' : 's'}...`, 0);
     let count = 0;
     try {
       for (const pack of packs) {
-        notice.setMessage(`🔄 Regenerating packs (${count + 1}/${packs.length}): ${pack.name}...`);
+        if (notice) {
+          notice.setMessage(`🔄 Regenerating packs (${count + 1}/${packs.length}): ${pack.name}...`);
+        }
         await this.reExportPack(pack, { silent: true });
         count++;
       }
-      notice.hide();
-      new Notice(`✅ Successfully regenerated ${count} context pack${count === 1 ? '' : 's'}!`, 4000);
+      notice?.hide();
+      if (!options?.silent) {
+        new Notice(`✅ Successfully regenerated ${count} context pack${count === 1 ? '' : 's'}!`, 4000);
+      }
     } catch (err) {
-      notice.hide();
+      notice?.hide();
       console.error('[AI Context Pack] Failed to regenerate all packs:', err);
-      new Notice(`⚠️ Failed to regenerate packs: ${err instanceof Error ? err.message : String(err)}`, 8000);
+      if (!options?.silent) {
+        new Notice(`⚠️ Failed to regenerate packs: ${err instanceof Error ? err.message : String(err)}`, 8000);
+      }
     }
   }
 
@@ -1032,7 +1059,8 @@ export default class ContextPackPlugin extends Plugin {
     excludeTagsStr: string,
     sortOrder: 'asc' | 'desc',
     weeklySummary = false,
-    resolvedConfig?: { folder: string; format: string }
+    resolvedConfig?: { folder: string; format: string },
+    options?: { silent?: boolean }
   ) {
     const dnConfig = resolvedConfig ?? (
       this.settings.dailyNotesAutoDetect
@@ -1043,14 +1071,14 @@ export default class ContextPackPlugin extends Plugin {
     const files = getDailyNotes(this.app, dnConfig, startDate, endDate);
 
     if (files.length === 0) {
-      new Notice(t('daily_notice_none'));
+      if (!options?.silent) new Notice(t('daily_notice_none'));
       return;
     }
 
-    const { notice } = this.startProgress(t('notice_packing'));
+    const progress = options?.silent ? null : this.startProgress(t('notice_packing'));
 
     const excludeTags = excludeTagsStr.split(',').map(t => t.trim()).filter(Boolean);
-    const options = { excludeTags, sortOrder };
+    const packOpts = { excludeTags, sortOrder };
 
     const weeklyHeader = weeklySummary
       ? buildWeeklyHeader(startDate, endDate, files.length)
@@ -1058,27 +1086,30 @@ export default class ContextPackPlugin extends Plugin {
 
     try {
       const content = await buildDailyPack(
-        this.app, files, dnConfig, options, this.formatOptions(), weeklyHeader
+        this.app, files, dnConfig, packOpts, this.formatOptions(), weeklyHeader
       );
-      notice.hide();
+      progress?.notice.hide();
 
       if (!content) {
-        new Notice(t('daily_notice_none'));
+        if (!options?.silent) new Notice(t('daily_notice_none'));
         return;
       }
 
-      const dateStr = moment().format('YYYYMMDD');
       const prefix = weeklySummary ? 'weekly' : 'daily';
       const startIso = moment(startDate).format('YYYY-MM-DD');
       const endIso = moment(endDate).format('YYYY-MM-DD');
       const packName = weeklySummary ? 'Weekly Notes' : 'Daily Notes';
-      this.handlePackOutput(content, `${prefix}-notes-${dateStr}`, files.length, packName, {
+      this.handlePackOutput(content, `${prefix}-notes`, files.length, packName, {
         source: { type: 'daily', query: `${startIso}..${endIso}` },
         files,
         name: packName,
-      });
+      }, undefined, options?.silent);
     } catch (err) {
-      this.handlePackError(notice, err);
+      if (progress) {
+        this.handlePackError(progress.notice, err);
+      } else {
+        console.error('[AI Context Pack]', err);
+      }
     }
   }
 
@@ -1313,7 +1344,8 @@ export default class ContextPackPlugin extends Plugin {
     const modeText = this.getModePrompt(mode);
     if (modeText) prompt = `${prompt}\n\n${modeText}`;
 
-    return `${prompt}\n\n---\n\n${content}`;
+    const safeSource = source.replace(/"/g, '&quot;');
+    return `${prompt}\n\n<context_pack source="${safeSource}" count="${noteCount}">\n${content}\n</context_pack>`;
   }
 
   private getModePrompt(mode: string): string {

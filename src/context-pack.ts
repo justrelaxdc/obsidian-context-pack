@@ -13,11 +13,10 @@ export async function buildContextPack(
     ? files
     : [...files].sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
 
-  const today = window.moment().format('YYYY-MM-DD');
   const headerTitle = meta.titleOverride ?? `Context Pack: ${meta.title}`;
   const sections: string[] = [`# ${headerTitle}`];
   if (!meta.omitMeta) {
-    sections.push(`Generated: ${today}`, `Source: ${meta.source}`, `Notes: ${targetFiles.length}`);
+    sections.push(`Source: ${meta.source}`, `Notes: ${targetFiles.length}`);
   }
   if (meta.description) {
     sections.push(meta.description);
